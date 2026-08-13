@@ -21,6 +21,8 @@ This is a demo/screening tool for a class project, **not a diagnostic instrument
 version, DOI: `10.21415/CQCW-1F92`) — Cookie Theft picture-description recordings
 and CHAT transcripts from Control and Dementia participants.
 
+A special **thank you** to TalkBank for allowing our group to use the research data to create a meaningful project!
+
 - Text: 552 transcripts (243 Control / 309 Dementia)
 - Audio: 395 recordings (163 Control / 232 Dementia)
 
