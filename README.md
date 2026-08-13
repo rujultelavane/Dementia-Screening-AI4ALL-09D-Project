@@ -1,7 +1,7 @@
 # AI4ALL Group09D — Dementia Screening from Picture-Description Tasks
 
 A research project exploring whether **dementia can be screened from
-the "Cookie Theft" picture-description task** — using two independent, separately
+the "Cookie Theft" picture-description task** — using three independent, separately
 trained models:
 
 - **Text model** — hand-crafted linguistic features extracted from a CHAT-format
@@ -10,9 +10,8 @@ trained models:
   timing) extracted from the raw recording with
   [openSMILE](https://audeering.github.io/opensmile-python/), fed into an
   **SVM (RBF kernel)** pipeline.
-
-The two models are **not fused into a single prediction** — see
-[Why the models aren't combined](#why-the-models-arent-combined) below.
+- **Fusion model** - Leakage-safe (out-of-fold) stacking combines both verbal and
+  audio signals. Best accuracy out of the three models.
 
 This is a demo/screening tool for a class project, **not a diagnostic instrument**.
 
@@ -24,9 +23,6 @@ and CHAT transcripts from Control and Dementia participants.
 
 - Text: 552 transcripts (243 Control / 309 Dementia)
 - Audio: 395 recordings (163 Control / 232 Dementia)
-
-The two sets don't share a reliable 1:1 join, which is the main reason the models
-are kept independent rather than combined into one prediction.
 
 ## Models & methodology
 
@@ -54,12 +50,6 @@ comparisons of Logistic Regression / Random Forest / SVM on the acoustic feature
 in `model_comparison.png`, `roc_curves.png`, `confusion_matrices.png`, and
 `rf_feature_importance.png` (produced by `modelevaluation`), which is what led to
 picking the SVM for the deployed audio pipeline.
-
-### Why the models aren't combined
-
-The transcript and acoustic datasets have different sizes (552 vs. 395 rows) and
-no dependable per-recording join between them, so a fused/ensembled prediction
-would require guessing at that match-up. Each model instead scores independently.
 
 ## Repository layout
 
