@@ -1,0 +1,14 @@
+streamlit
+joblib
+pandas
+scikit-learn
+spacy
+lexicalrichness
+textstat
+opensmile
+
+# spaCy's small English model, pinned as a direct wheel URL. Streamlit Community
+# Cloud only runs `pip install -r requirements.txt` (no post-install shell step),
+# so `python -m spacy download en_core_web_sm` alone would leave the model missing
+# in that environment. This line makes pip install it like any other dependency.
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl

@@ -1,0 +1,209 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# ---- 1. Load data ----
+df = pd.read_csv('acoustic_features.csv')
+label_cols = ['file', 'group']
+feature_cols = [c for c in df.columns if c not in label_cols]
+
+print(df.shape)
+print(df['group'].value_counts())
+
+# ---- 2. Standardize features (z-score) ----
+features = df[feature_cols]
+labels = df[label_cols]
+
+z_scored = (features - features.mean()) / features.std()
+z_df = pd.concat([labels, z_scored], axis=1)
+
+print(z_scored.mean().round(2).head())
+print(z_scored.std().round(2).head())
+
+# ---- 3. Rank features by effect size (Cohen's d) ----
+def cohens_d(x1, x2):
+    n1, n2 = len(x1), len(x2)
+    pooled_std = np.sqrt(((n1-1)*x1.var(ddof=1) + (n2-1)*x2.var(ddof=1)) / (n1+n2-2))
+    return (x1.mean() - x2.mean()) / pooled_std
+
+dementia_raw = features[df['group'] == 'dementia']
+control_raw = features[df['group'] == 'control']
+
+effect_sizes = {col: cohens_d(dementia_raw[col], control_raw[col]) for col in feature_cols}
+effect_df = pd.Series(effect_sizes).sort_values(key=abs, ascending=False)
+top15 = effect_df.head(15)
+top6 = top15.index[:6].tolist()
+print(top15)
+
+# Optional: human-readable labels for plotting
+READABLE_LABELS = {
+    'loudness_sma3_stddevNorm': 'Loudness Variability',
+    'loudnessPeaksPerSec': 'Loudness Peaks / Second',
+    'F0semitoneFrom27.5Hz_sma3nz_pctlrange0-2': 'Pitch Range',
+    'F2frequency_sma3nz_stddevNorm': 'F2 Frequency Variability',
+    'F0semitoneFrom27.5Hz_sma3nz_percentile80.0': 'Pitch (80th Percentile)',
+    'slopeV0-500_sma3nz_amean': 'Spectral Slope (0-500 Hz)',
+    'jitterLocal_sma3nz_amean': 'Jitter (Pitch Perturbation)',
+    'loudness_sma3_percentile50.0': 'Median Loudness',
+    'mfcc4_sma3_amean': 'MFCC 4 (Timbre)',
+    'mfcc4V_sma3nz_amean': 'MFCC 4, Voiced Segments',
+    'F2amplitudeLogRelF0_sma3nz_stddevNorm': 'F2 Amplitude Variability',
+    'F0semitoneFrom27.5Hz_sma3nz_stddevNorm': 'Pitch Variability',
+    'F3amplitudeLogRelF0_sma3nz_stddevNorm': 'F3 Amplitude Variability',
+    'F2frequency_sma3nz_amean': 'F2 Frequency (Vowel Quality)',
+    'VoicedSegmentsPerSec': 'Speech Rate (Voiced Segments/Sec)',
+}
+readable_top15 = [READABLE_LABELS.get(f, f) for f in top15.index]
+
+# ---- 4. Heatmap: top 15 features, standardized group means ----
+z_df['group'] = df['group'].values
+group_means = z_df.groupby('group')[top15.index.tolist()].mean().T
+group_means = group_means[['control', 'dementia']]
+group_means.index = readable_top15
+
+plt.figure(figsize=(6, 8))
+sns.heatmap(group_means, cmap='coolwarm', center=0, annot=True, fmt='.2f',
+            cbar_kws={'label': 'Standardized value (z-score)'})
+plt.title("Top 15 Acoustic Features: Control vs Dementia\n(standardized mean values)")
+plt.xlabel("Group")
+plt.tight_layout()
+plt.savefig('heatmap.png', dpi=200)
+plt.show()
+
+# ---- 5. Effect size bar chart ----
+plt.figure(figsize=(7.5, 8))
+colors = ['#d62728' if v > 0 else '#1f77b4' for v in top15.values]
+plt.barh(readable_top15[::-1], top15.values[::-1], color=colors[::-1])
+plt.axvline(0, color='black', linewidth=0.8)
+plt.xlabel("Cohen's d (dementia − control)")
+plt.title("Effect Size Ranking: Top 15 Discriminating Features")
+plt.tight_layout()
+plt.savefig('effect_size_bar.png', dpi=200)
+plt.show()
+
+# ---- 6. Fairness-style barplots with bootstrapped 95% CI (top 6 features) ----
+fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+for ax, feat in zip(axes.flatten(), top6):
+    sns.barplot(x='group', y=feat, hue='group', data=df, order=['control', 'dementia'],
+                palette={'control': '#1f77b4', 'dementia': '#d62728'}, legend=False, ax=ax)
+    ax.set_title(READABLE_LABELS.get(feat, feat), fontsize=11)
+plt.suptitle('Average Acoustic Feature Values by Group\n(bars = mean, whiskers = bootstrapped 95% CI)')
+plt.tight_layout()
+plt.savefig('fairness_style_barplots.png', dpi=200)
+plt.show()
+
+# ---- 7. Train/test split + model training ----
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score,
+                              roc_auc_score, roc_curve, confusion_matrix)
+
+np.random.seed(42)
+X = df[feature_cols].values
+y = (df['group'] == 'dementia').astype(int).values
+
+X_train, X_test, y_train, y_test, idx_train, idx_test = train_test_split(
+    X, y, df.index.values, test_size=0.2, stratify=y, random_state=42
+)
+
+scaler = StandardScaler()
+X_train_s = scaler.fit_transform(X_train)
+X_test_s = scaler.transform(X_test)
+
+models = {
+    'Logistic Regression': LogisticRegression(max_iter=2000, random_state=42),
+    'Random Forest': RandomForestClassifier(n_estimators=300, random_state=42),
+    'SVM (RBF)': SVC(probability=True, random_state=42),
+}
+
+results = {}
+roc_data = {}
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+for name, model in models.items():
+    model.fit(X_train_s, y_train)
+    preds = model.predict(X_test_s)
+    probs = model.predict_proba(X_test_s)[:, 1]
+
+    acc = accuracy_score(y_test, preds)
+    prec = precision_score(y_test, preds)
+    rec = recall_score(y_test, preds)
+    f1 = f1_score(y_test, preds)
+    auc = roc_auc_score(y_test, probs)
+    cv_scores = cross_val_score(model, X_train_s, y_train, cv=cv, scoring='accuracy')
+
+    results[name] = {'accuracy': acc, 'precision': prec, 'recall': rec, 'f1': f1,
+                      'roc_auc': auc, 'cv_mean': cv_scores.mean(), 'cv_std': cv_scores.std(),
+                      'preds': preds, 'probs': probs, 'model': model}
+    fpr, tpr, _ = roc_curve(y_test, probs)
+    roc_data[name] = (fpr, tpr, auc)
+
+    print(f"{name}: Acc={acc:.3f} Prec={prec:.3f} Rec={rec:.3f} F1={f1:.3f} AUC={auc:.3f} "
+          f"CV={cv_scores.mean():.3f}+/-{cv_scores.std():.3f}")
+
+# ---- 8. Model comparison bar chart ----
+metrics = ['accuracy', 'precision', 'recall', 'f1', 'roc_auc']
+metric_labels = ['Accuracy', 'Precision', 'Recall', 'F1 Score', 'ROC-AUC']
+comparison_df = pd.DataFrame({name: [results[name][m] for m in metrics] for name in models}, index=metric_labels)
+
+comparison_df.plot(kind='bar', figsize=(9, 5.5))
+plt.title('Model Performance Comparison (held-out test set)')
+plt.ylabel('Score'); plt.ylim(0, 1.05); plt.xticks(rotation=0)
+plt.tight_layout()
+plt.savefig('model_comparison.png', dpi=200)
+plt.show()
+
+# ---- 9. Confusion matrices ----
+fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+for ax, (name, res) in zip(axes, results.items()):
+    cm = confusion_matrix(y_test, res['preds'])
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False, ax=ax,
+                xticklabels=['Control', 'Dementia'], yticklabels=['Control', 'Dementia'])
+    ax.set_title(name); ax.set_xlabel('Predicted'); ax.set_ylabel('Actual')
+plt.suptitle('Confusion Matrices (held-out test set, n=79)')
+plt.tight_layout()
+plt.savefig('confusion_matrices.png', dpi=200)
+plt.show()
+
+# ---- 10. ROC curves ----
+plt.figure(figsize=(6.5, 6))
+for name, (fpr, tpr, auc) in roc_data.items():
+    plt.plot(fpr, tpr, label=f'{name} (AUC={auc:.2f})', linewidth=2)
+plt.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Chance')
+plt.xlabel('False Positive Rate'); plt.ylabel('True Positive Rate')
+plt.title('ROC Curves: Model Comparison'); plt.legend()
+plt.tight_layout()
+plt.savefig('roc_curves.png', dpi=200)
+plt.show()
+
+# ---- 11. Random Forest feature importance ----
+rf = results['Random Forest']['model']
+importances = pd.Series(rf.feature_importances_, index=feature_cols).sort_values(ascending=False).head(15)
+readable_imp = [READABLE_LABELS.get(f, f) for f in importances.index]
+
+plt.figure(figsize=(7.5, 8))
+plt.barh(readable_imp[::-1], importances.values[::-1], color='#55a868')
+plt.xlabel('Random Forest Feature Importance')
+plt.title('Top 15 Features Driving Random Forest Predictions')
+plt.tight_layout()
+plt.savefig('rf_feature_importance.png', dpi=200)
+plt.show()
+
+# ---- 12. Error analysis ----
+best_model_name = max(results, key=lambda n: results[n]['f1'])
+best_res = results[best_model_name]
+test_files = df.loc[idx_test, 'file'].values
+error_mask = best_res['preds'] != y_test
+errors_df = pd.DataFrame({
+    'file': test_files[error_mask],
+    'true_label': np.where(y_test[error_mask] == 1, 'dementia', 'control'),
+    'predicted_label': np.where(best_res['preds'][error_mask] == 1, 'dementia', 'control'),
+    'predicted_prob_dementia': best_res['probs'][error_mask].round(3)
+})
+errors_df.to_csv('misclassified_examples.csv', index=False)
+print(f"Best model by F1: {best_model_name} | Misclassified {error_mask.sum()}/{len(y_test)}")
+print(errors_df)

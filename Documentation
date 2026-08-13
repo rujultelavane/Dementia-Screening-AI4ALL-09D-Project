@@ -1,0 +1,117 @@
+Overview
+
+Two independent pipelines classify speech samples as Control or Dementia:
+
+Text Model	Audio Model
+Input	CHAT-format (.cha) transcript	Raw audio recording
+Features	11 hand-crafted linguistic features	88 eGeMAPS acoustic features (openSMILE)
+Algorithm	Logistic Regression	SVM (RBF kernel)
+Accuracy	76.3% ± 3.8% (5-fold stratified CV)	61.8% ± 2.5% (5-fold speaker-grouped CV)
+Deployed pipeline	transcript_files/model/logistic_regression_pipeline.pkl	model/audio_model.pkl
+
+The two models are not fused into a single prediction — see Key Design Decisions.
+
+Models & Results
+📝 Text Model
+
+11 linguistic features per transcript, extracted via transcript_files/extraction_files.py:
+
+info_units_mentioned, avg_word_length, avg_dependency_tree_depth,
+avg_sentence_length, pronoun_ratio, n_repetitions, n_vague_words,
+n_pauses, mtld, clause_density, semantic_coherence
+
+Trained as StandardScaler + LogisticRegression in an sklearn Pipeline. Validated with 5-fold stratified cross-validation.
+
+🎙️ Audio Model
+
+88 eGeMAPS functional features (pitch, loudness, spectral, and timing statistics), extracted with openSMILE via scripts/extract_features.py.
+
+Trained as StandardScaler + SVC(kernel='rbf'). Validated with 5-fold speaker-grouped cross-validation (no speaker appears in both train and test folds — prevents inflated accuracy).
+
+Exploratory comparisons across Logistic Regression / Random Forest / SVM on the acoustic features (see modelevaluation/, which generates model_comparison.png, roc_curves.png, confusion_matrices.png, rf_feature_importance.png) informed the choice of SVM for deployment.
+
+Dataset Composition
+	Total	Control	Dementia
+Transcripts	552	243	309
+Recordings	395	163	232
+How the App Works
+
+The deployed app is a Streamlit application (streamlit_app.py):
+
+User selects Text (transcript) or Audio (recording) as input.
+Text path: upload/paste a .cha transcript (participant speech marked *PAR:) → 11 features extracted → Logistic Regression pipeline → prediction + confidence (~76% expected accuracy).
+Audio path: upload a recording → 88 eGeMAPS features extracted via openSMILE → SVM pipeline → prediction + confidence (~62% expected accuracy).
+Each model's cross-validated accuracy is shown alongside its prediction so users can calibrate trust between the two paths.
+A visible disclaimer reminds users this is a research/screening demo validated only on the Cookie Theft task.
+
+A separate FastAPI service (transcript_files/app.py) also exposes the text model as an alternative API, independent of the Streamlit app.
+
+Repository Structure
+.
+├── streamlit_app.py                        # Deployed Streamlit demo app
+├── model/
+│   └── audio_model.pkl                     # Deployed SVM audio pipeline
+├── transcript_files/
+│   ├── model/
+│   │   └── logistic_regression_pipeline.pkl   # Deployed text pipeline
+│   ├── extraction_files.py                 # 11-feature extractor (used by the app)
+│   ├── advanced_features.py                # spaCy / lexicalrichness / textstat features
+│   ├── train_transcript_mode.py             # Trains the final LogReg pipeline
+│   ├── evaluate_model.py                    # Honest 5-fold stratified CV evaluation
+│   ├── clean_csv.py                         # Trims raw feature CSV to the model's 11 columns
+│   ├── app.py                               # Standalone FastAPI service (text model only)
+│   ├── Control/  Dementia/                  # Raw .cha transcripts by group
+│   ├── transcript_features.csv
+│   └── transcript_features_clean.csv
+├── scripts/
+│   ├── extract_features.py                 # openSMILE extraction → acoustic_features.csv
+│   ├── remove_instructor_audio.py           # Trims interviewer speech using transcript timestamps
+│   ├── audio_model_training_wip.py          # Grouped train/test split + model selection (audio)
+│   └── text_model_training_wip.py           # Exploratory sentence-transformer text pipeline
+├── audio_files/                             # Original recordings by group
+├── revised_audio_files/                     # Recordings with instructor audio removed
+├── acoustic_features.csv                    # 88-dim eGeMAPS features, one row per recording
+├── modelevaluation/                         # Acoustic model comparison + evaluation plots
+└── requirements.txt
+Setup & Installation
+bash
+# Clone the repo
+git clone https://github.com/<your-username>/<repo-name>.git
+cd <repo-name>
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run locally
+streamlit run streamlit_app.py
+
+Requirements: Python 3.10+, streamlit, pandas, numpy, scikit-learn, opensmile, spacy, lexicalrichness, textstat.
+
+DeploymentLink
+🔗 https://ai4all-group09d-project.streamlit.app/
+
+
+Deployed via Streamlit Community Cloud, pointed at streamlit_app.py on the main branch.
+
+Key Design Decisions
+Models are not merged/ensembled. The text (552 rows) and audio (395 rows) datasets have no dependable 1:1 join between recordings and transcripts, so a fused prediction would require guessing at the match-up. Each model scores independently.
+Text model is the recommended path, given its clearly stronger accuracy (76.3% vs. 61.8%). The audio model is kept available for exploration/comparison, with accuracy shown transparently.
+Streamlit and FastAPI kept separate. streamlit_app.py is the user-facing deliverable; transcript_files/app.py is an alternative/internal API for the text model only.
+Speaker-grouped CV for audio avoids the same speaker appearing in both train and test folds, which would otherwise inflate reported accuracy.
+Testing
+Test Input	Path	Expected	Actual	Notes
+Known Control .cha transcript	Text	Control		
+Known Dementia .cha transcript	Text	Dementia		
+Known Control recording	Audio	Control		
+Known Dementia recording	Audio	Dementia		
+Transcript missing *PAR: markup	Text	Graceful error		
+Off-task transcript (not Cookie Theft)	Text	No crash; flagged out-of-scope		
+Empty input	Both	Graceful error, no crash		
+Short/noisy recording	Audio	No crash; reasonable output		
+
+
+Governance & Real-World Considerations
+Monitoring: track prediction confidence and class-distribution drift over time.
+Governance: health-adjacent, high-stakes use case — real deployment would require clinical validation beyond Cookie Theft, IRB/ethics oversight, and bias auditing across age, accent, dialect, and language groups.
+Maintenance: version-controlled model artifacts, periodic re-evaluation with evaluate_model.py-style honest CV, rollback plan if retraining underperforms current baselines (76.3% / 61.8%).
+Ethical note: false positives/negatives carry real emotional and medical weight — reflected in the in-app disclaimer and visible accuracy figures.
